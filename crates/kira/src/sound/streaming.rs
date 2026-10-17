@@ -27,11 +27,13 @@ mod decoder;
 mod handle;
 mod settings;
 mod sound;
+mod owner;
 
 pub use data::*;
 pub use decoder::*;
 pub use handle::*;
 pub use settings::*;
+pub use owner::{DecoderOwner, OwnedStreamingSoundData};
 
 use crate::{
 	command::{command_writer_and_reader, CommandReader, CommandWriter, ValueChangeCommand},

@@ -1,7 +1,7 @@
 mod renderer_with_cpu_usage;
 mod stream_manager;
 
-use std::sync::Mutex;
+use std::sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex};
 
 use renderer_with_cpu_usage::RendererWithCpuUsage;
 use rtrb::Consumer;
@@ -34,9 +34,25 @@ pub struct CpalBackend {
 	custom_device: bool,
 	buffer_size: BufferSize,
 	cpu_usage_consumer: Option<Mutex<Consumer<f32>>>,
+	suspended: Arc<AtomicBool>,
 }
 
 impl CpalBackend {
+	/// Silence the device without advancing mixer clocks or sound positions.
+	pub fn set_suspended(&mut self, suspended: bool) {
+		self.suspended.store(suspended, Ordering::Release);
+	}
+
+	/// Stop the device watcher and join it on the caller's non-audio thread.
+	/// All device callbacks have ended when this returns.
+	pub fn stop_and_join(&mut self) -> std::thread::Result<()> {
+		if let State::Initialized { stream_manager_controller } = &mut self.state {
+			stream_manager_controller.stop_and_join()
+		} else {
+			Ok(())
+		}
+	}
+
 	/**
 	Returns the oldest reported CPU usage in the queue.
 
@@ -121,6 +137,7 @@ impl Backend for CpalBackend {
 				custom_device,
 				buffer_size: settings.buffer_size,
 				cpu_usage_consumer: None,
+				suspended: Arc::new(AtomicBool::new(false)),
 			},
 			sample_rate,
 		))
@@ -137,6 +154,7 @@ impl Backend for CpalBackend {
 					config,
 					self.custom_device,
 					self.buffer_size,
+					self.suspended.clone(),
 				)?,
 			};
 			self.cpu_usage_consumer = Some(Mutex::new(cpu_usage_consumer));
@@ -149,11 +167,6 @@ impl Backend for CpalBackend {
 
 impl Drop for CpalBackend {
 	fn drop(&mut self) {
-		if let State::Initialized {
-			stream_manager_controller,
-		} = &self.state
-		{
-			stream_manager_controller.stop();
-		}
+		let _ = self.stop_and_join();
 	}
 }

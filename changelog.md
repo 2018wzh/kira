@@ -1,3 +1,16 @@
+# Native owner lifecycle (0.10.8 fork)
+
+- Add `StreamingSoundData::with_decoder_owner` and non-audio-thread
+  `DecoderOwner::stop_and_join`. Playback handle drop behavior is unchanged.
+- Signal decoder cancellation when the mixer destroys a sound; never join on
+  the audio callback. Cancel both full-buffer waits and repeated decode loops.
+- Own and join the CPAL stream-manager worker, including failed startup, and
+  wake its polling wait on close. `CpalBackend::stop_and_join` reports worker panic.
+- Add whole-mixer suspension without rebuilding the device or advancing clocks.
+- Decoder-owner design is shared with the independent 0.9.6 lifecycle fix;
+  this branch preserves the 0.10.8 renderer, decoder and device implementations.
+- Non-commercial regressions live in `crates/kira/tests/native_owners.rs`.
+
 # v0.10.8 - June 17, 2025
 
 - Decode default audio track when multiple tracks are present (thanks @siavashserver!)

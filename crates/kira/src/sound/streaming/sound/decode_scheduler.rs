@@ -91,12 +91,21 @@ impl<Error: Send + 'static> DecodeScheduler<Error> {
 		self.transport.position
 	}
 
-	pub fn start(mut self) {
+	pub fn start(self) {
+		self.spawn();
+	}
+
+	pub(crate) fn start_owned(self, owner: &mut super::super::DecoderOwner) {
+		let shared = self.shared.clone();
+		owner.register(shared, self.spawn());
+	}
+
+	fn spawn(mut self) -> std::thread::JoinHandle<()> {
 		std::thread::spawn(move || loop {
 			match self.run() {
 				Ok(result) => match result {
 					NextStep::Continue => {}
-					NextStep::Wait => std::thread::sleep(DECODER_THREAD_SLEEP_DURATION),
+					NextStep::Wait => std::thread::park_timeout(DECODER_THREAD_SLEEP_DURATION),
 					NextStep::End => break,
 				},
 				Err(error) => {
@@ -104,12 +113,12 @@ impl<Error: Send + 'static> DecodeScheduler<Error> {
 					self.shared.encountered_error.store(true, Ordering::SeqCst);
 				}
 			}
-		});
+		})
 	}
 
 	pub fn run(&mut self) -> Result<NextStep, Error> {
 		// if the sound was manually stopped, end the thread
-		if self.shared.state() == PlaybackState::Stopped {
+		if self.shared.decoder_stopped.load(Ordering::Acquire) || self.shared.state() == PlaybackState::Stopped {
 			return Ok(NextStep::End);
 		}
 		// if the frame ringbuffer is full, sleep for a bit
@@ -166,6 +175,9 @@ impl<Error: Send + 'static> DecodeScheduler<Error> {
 			self.decoder_current_frame_index = self.decoder.seek(index)?;
 		}
 		loop {
+			if self.shared.decoder_stopped.load(Ordering::Acquire) {
+				return Ok(Frame::ZERO);
+			}
 			let decoded_chunk = DecodedChunk {
 				start_index: self.decoder_current_frame_index,
 				frames: self.decoder.decode()?,

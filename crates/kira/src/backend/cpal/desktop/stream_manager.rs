@@ -36,11 +36,18 @@ pub(super) struct StreamManagerController {
 	should_drop: Arc<AtomicBool>,
 	num_stream_errors_discarded: Arc<AtomicU64>,
 	handled_stream_error_consumer: Mutex<Consumer<StreamError>>,
+	worker: Option<std::thread::JoinHandle<()>>,
 }
 
 impl StreamManagerController {
-	pub fn stop(&self) {
+	pub fn stop_and_join(&mut self) -> std::thread::Result<()> {
 		self.should_drop.store(true, Ordering::SeqCst);
+		if let Some(worker) = self.worker.take() {
+			worker.thread().unpark();
+			worker.join()
+		} else {
+			Ok(())
+		}
 	}
 
 	#[must_use]
@@ -57,6 +64,12 @@ impl StreamManagerController {
 	}
 }
 
+impl Drop for StreamManagerController {
+	fn drop(&mut self) {
+		let _ = self.stop_and_join();
+	}
+}
+
 /// Starts a cpal stream and restarts it if needed
 /// in the case of device changes or disconnections.
 pub(super) struct StreamManager {
@@ -65,6 +78,7 @@ pub(super) struct StreamManager {
 	sample_rate: u32,
 	custom_device: bool,
 	buffer_size: BufferSize,
+	suspended: Arc<AtomicBool>,
 }
 
 impl StreamManager {
@@ -74,6 +88,7 @@ impl StreamManager {
 		mut config: StreamConfig,
 		custom_device: bool,
 		buffer_size: BufferSize,
+		suspended: Arc<AtomicBool>,
 	) -> Result<StreamManagerController, Error> {
 		let should_drop = Arc::new(AtomicBool::new(false));
 		let should_drop_clone = should_drop.clone();
@@ -84,15 +99,16 @@ impl StreamManager {
 		let (mut handled_stream_error_producer, handled_stream_error_consumer) =
 			RingBuffer::new(64);
 
-		let (mut initial_result_producer, mut initial_result_consumer) = RingBuffer::new(1);
+		let (initial_result_producer, initial_result_consumer) = std::sync::mpsc::sync_channel(1);
 
-		std::thread::spawn(move || {
+		let worker = std::thread::spawn(move || {
 			let mut stream_manager = StreamManager {
 				state: State::Idle { renderer },
 				device_name: device_name(&device),
 				sample_rate: config.sample_rate.0,
 				custom_device,
 				buffer_size,
+				suspended,
 			};
 			let mut unhandled_stream_error_consumer = match stream_manager.start_stream(
 				&device,
@@ -100,16 +116,16 @@ impl StreamManager {
 				num_stream_errors_discarded.clone(),
 			) {
 				Ok(unhandled_stream_error_consumer) => {
-					initial_result_producer.push(Ok(())).unwrap();
+					if initial_result_producer.send(Ok(())).is_err() { return; }
 					unhandled_stream_error_consumer
 				}
 				Err(err) => {
-					initial_result_producer.push(Err(err)).unwrap();
+					let _ = initial_result_producer.send(Err(err));
 					return;
 				}
 			};
 			loop {
-				std::thread::sleep(CHECK_STREAM_INTERVAL);
+				std::thread::park_timeout(CHECK_STREAM_INTERVAL);
 				if should_drop.load(Ordering::SeqCst) {
 					break;
 				}
@@ -121,18 +137,23 @@ impl StreamManager {
 			}
 		});
 
-		loop {
-			if let Ok(result) = initial_result_consumer.pop() {
-				result?;
-				break;
+		match initial_result_consumer.recv() {
+			Ok(Ok(())) => {}
+			Ok(Err(error)) => {
+				let _ = worker.join();
+				return Err(error);
 			}
-			std::thread::sleep(Duration::from_micros(100));
+			Err(_) => {
+				let _ = worker.join();
+				return Err(Error::StreamManagerStopped);
+			}
 		}
 
 		Ok(StreamManagerController {
 			should_drop: should_drop_clone,
 			num_stream_errors_discarded: num_stream_errors_discarded_clone,
 			handled_stream_error_consumer: Mutex::new(handled_stream_error_consumer),
+			worker: Some(worker),
 		})
 	}
 
@@ -213,9 +234,14 @@ impl StreamManager {
 		let (mut unhandled_stream_error_producer, unhandled_stream_error_consumer) =
 			RingBuffer::new(64);
 		let channels = config.channels;
+		let suspended = self.suspended.clone();
 		let stream = device.build_output_stream(
 			config,
 			move |data: &mut [f32], _| {
+				if suspended.load(Ordering::Acquire) {
+					data.fill(0.0);
+					return;
+				}
 				#[cfg(feature = "assert_no_alloc")]
 				assert_no_alloc::assert_no_alloc(|| {
 					process_renderer(&mut renderer_wrapper, data, channels, sample_rate);

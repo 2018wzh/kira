@@ -13,6 +13,8 @@ pub enum Error {
 	BuildStreamError(BuildStreamError),
 	/// An error occurred when starting the audio stream.
 	PlayStreamError(PlayStreamError),
+	/// The stream manager worker stopped before completing initialization.
+	StreamManagerStopped,
 }
 
 impl Display for Error {
@@ -24,6 +26,7 @@ impl Display for Error {
 			Error::DefaultStreamConfigError(error) => error.fmt(f),
 			Error::BuildStreamError(error) => error.fmt(f),
 			Error::PlayStreamError(error) => error.fmt(f),
+			Error::StreamManagerStopped => f.write_str("Audio stream manager stopped during initialization"),
 		}
 	}
 }
