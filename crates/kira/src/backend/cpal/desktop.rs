@@ -90,6 +90,20 @@ impl CpalBackend {
 			None
 		}
 	}
+
+	/// Stops playback and joins the native stream-manager thread.
+	///
+	/// Call from the AudioManager owner thread, never from an audio callback.
+	/// After return, no device callback or stream-manager work remains; the
+	/// manager must only be dropped, not reused for playback. Repeated calls
+	/// are harmless. Ordinary backend Drop remains nonblocking.
+	pub fn stop_and_join(&mut self) -> Result<(), Error> {
+		if let State::Initialized { stream_manager_controller } = &mut self.state {
+			stream_manager_controller.stop_and_join()
+		} else {
+			Ok(())
+		}
+	}
 }
 
 impl Backend for CpalBackend {

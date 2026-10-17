@@ -1,4 +1,6 @@
 mod send_on_drop;
+#[cfg(test)]
+mod tests;
 
 use std::{
 	sync::{
@@ -36,11 +38,23 @@ pub(super) struct StreamManagerController {
 	should_drop: Arc<AtomicBool>,
 	num_stream_errors_discarded: Arc<AtomicU64>,
 	handled_stream_error_consumer: Mutex<Consumer<cpal::Error>>,
+	thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl StreamManagerController {
 	pub fn stop(&self) {
 		self.should_drop.store(true, Ordering::SeqCst);
+		if let Some(thread) = &self.thread {
+			thread.thread().unpark();
+		}
+	}
+
+	pub fn stop_and_join(&mut self) -> Result<(), Error> {
+		self.stop();
+		if let Some(thread) = self.thread.take() {
+			thread.join().map_err(|_| Error::StreamManagerPanicked)?;
+		}
+		Ok(())
 	}
 
 	#[must_use]
@@ -84,9 +98,9 @@ impl StreamManager {
 		let (mut handled_stream_error_producer, handled_stream_error_consumer) =
 			RingBuffer::new(64);
 
-		let (mut initial_result_producer, mut initial_result_consumer) = RingBuffer::new(1);
+		let (initial_result_producer, initial_result_consumer) = std::sync::mpsc::sync_channel(1);
 
-		std::thread::spawn(move || {
+		let thread = std::thread::Builder::new().name("kira-cpal-stream-manager".into()).spawn(move || {
 			let mut stream_manager = StreamManager {
 				state: State::Idle { renderer },
 				device_id: device_id(&device),
@@ -100,16 +114,16 @@ impl StreamManager {
 				num_stream_errors_discarded.clone(),
 			) {
 				Ok(unhandled_stream_error_consumer) => {
-					initial_result_producer.push(Ok(())).unwrap();
+					let _ = initial_result_producer.send(Ok(()));
 					unhandled_stream_error_consumer
 				}
 				Err(err) => {
-					initial_result_producer.push(Err(err)).unwrap();
+					let _ = initial_result_producer.send(Err(err));
 					return;
 				}
 			};
 			loop {
-				std::thread::sleep(CHECK_STREAM_INTERVAL);
+				std::thread::park_timeout(CHECK_STREAM_INTERVAL);
 				if should_drop.load(Ordering::SeqCst) {
 					break;
 				}
@@ -119,21 +133,28 @@ impl StreamManager {
 					&num_stream_errors_discarded,
 				);
 			}
-		});
+		}).map_err(Error::StreamManagerSpawn)?;
 
-		loop {
-			if let Ok(result) = initial_result_consumer.pop() {
-				result?;
-				break;
-			}
-			std::thread::sleep(Duration::from_micros(100));
-		}
-
-		Ok(StreamManagerController {
+		let mut controller = StreamManagerController {
 			should_drop: should_drop_clone,
 			num_stream_errors_discarded: num_stream_errors_discarded_clone,
 			handled_stream_error_consumer: Mutex::new(handled_stream_error_consumer),
-		})
+			thread: Some(thread),
+		};
+		match initial_result_consumer.recv() {
+			Ok(Ok(())) => Ok(controller),
+			result => {
+				let joined = controller.stop_and_join();
+				match result {
+					Ok(Err(error)) => Err(error),
+					Err(_) => {
+						joined?;
+						Err(Error::StreamManagerPanicked)
+					}
+					Ok(Ok(())) => unreachable!(),
+				}
+			}
+		}
 	}
 
 	/// Restarts the stream if the audio device gets disconnected.

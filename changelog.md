@@ -1,3 +1,13 @@
+# Native-owner lifecycle patch (0.12.2)
+
+- Add explicit `CpalBackend::stop_and_join` for native embedding owners. It
+  stops device playback and joins the stream-manager thread, including worker
+  resource destruction. Call it from the manager owner, never an audio callback.
+- Keep ordinary backend/track/sound handle Drop nonblocking. Retain the exact
+  0.12.2 release dependency versions and default playback behavior.
+- Join the stream-manager thread on startup failure; report startup worker
+  panic instead of waiting forever for an initialization result.
+
 # v0.12.2 - July 16, 2026
 
 - Update to symphonia 0.6 (thanks @Eagisa!)
