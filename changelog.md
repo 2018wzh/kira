@@ -10,6 +10,9 @@
 - Decoder-owner design is shared with the independent 0.9.6 lifecycle fix;
   this branch preserves the 0.10.8 renderer, decoder and device implementations.
 - Non-commercial regressions live in `crates/kira/tests/native_owners.rs`.
+- Standalone runs pin the CPAL 0.15.3 WASAPI teardown fix at
+  `65ac8a6ac1a635cc26bfc5af331295b052044908`; dependency consumers apply the
+  same crates.io patch in their workspace root.
 
 # v0.10.8 - June 17, 2025
 

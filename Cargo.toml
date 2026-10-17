@@ -11,3 +11,6 @@ members = [
 	"crates/examples/spatial-audio",
 ]
 resolver = "2"
+
+[patch.crates-io]
+cpal = { git = "https://github.com/2018wzh/cpal.git", rev = "65ac8a6ac1a635cc26bfc5af331295b052044908" }
