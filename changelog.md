@@ -1,3 +1,12 @@
+# Unreleased - native owner lifetime fixes
+
+- Join the desktop CPAL stream watcher when its backend is dropped; wake its
+  timed wait before joining.
+- Add `DecoderOwner` and `StreamingSoundData::with_decoder_owner` for explicit
+  gameplay-thread cancellation and joining of streaming decoders. Sound
+  destruction signals cancellation without joining on the realtime callback;
+  playback-handle drop behavior is unchanged.
+
 # v0.8.7 - January 31, 2024
 
 - Fix `ClockInfoProvider` having poor timing resolution

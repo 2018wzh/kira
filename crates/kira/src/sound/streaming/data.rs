@@ -35,6 +35,15 @@ impl<Error: Send> StreamingSoundData<Error> {
 			settings,
 		}
 	}
+
+	/// Registers decoder lifetime with a non-realtime gameplay owner.
+	/// The returned playback handle keeps its original drop semantics.
+	pub fn with_decoder_owner(
+		self,
+		owner: &mut super::DecoderOwner,
+	) -> OwnedStreamingSoundData<'_, Error> {
+		OwnedStreamingSoundData { data: self, owner }
+	}
 }
 
 impl<T: Send> StreamingSoundData<T> {
@@ -143,6 +152,23 @@ impl<Error: Send + 'static> SoundData for StreamingSoundData<Error> {
 	fn into_sound(self) -> Result<(Box<dyn crate::sound::Sound>, Self::Handle), Self::Error> {
 		let (sound, handle, scheduler) = self.split()?;
 		scheduler.start();
+		Ok((Box::new(sound), handle))
+	}
+}
+
+/// Streaming data whose decoder thread is retained by a gameplay owner.
+pub struct OwnedStreamingSoundData<'a, Error: Send + 'static> {
+	data: StreamingSoundData<Error>,
+	owner: &'a mut super::DecoderOwner,
+}
+
+impl<Error: Send + 'static> SoundData for OwnedStreamingSoundData<'_, Error> {
+	type Error = Error;
+	type Handle = StreamingSoundHandle<Error>;
+
+	fn into_sound(self) -> Result<(Box<dyn crate::sound::Sound>, Self::Handle), Self::Error> {
+		let (sound, handle, scheduler) = self.data.split()?;
+		scheduler.start_owned(self.owner);
 		Ok((Box::new(sound), handle))
 	}
 }

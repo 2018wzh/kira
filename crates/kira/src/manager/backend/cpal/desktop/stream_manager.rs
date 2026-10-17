@@ -36,11 +36,22 @@ enum State {
 
 pub(super) struct StreamManagerController {
 	should_drop: Arc<AtomicBool>,
+	worker: Option<std::thread::JoinHandle<()>>,
 }
 
 impl StreamManagerController {
-	pub fn stop(&self) {
+	pub fn stop(&mut self) {
 		self.should_drop.store(true, Ordering::SeqCst);
+		if let Some(worker) = self.worker.take() {
+			worker.thread().unpark();
+			let _ = worker.join();
+		}
+	}
+}
+
+impl Drop for StreamManagerController {
+	fn drop(&mut self) {
+		self.stop();
 	}
 }
 
@@ -60,7 +71,7 @@ impl StreamManager {
 	) -> StreamManagerController {
 		let should_drop = Arc::new(AtomicBool::new(false));
 		let should_drop_clone = should_drop.clone();
-		std::thread::spawn(move || {
+		let worker = std::thread::spawn(move || {
 			let mut stream_manager = StreamManager {
 				state: State::Idle { renderer },
 				device_name: device_name(&device),
@@ -68,7 +79,7 @@ impl StreamManager {
 			};
 			stream_manager.start_stream(&device, &config).unwrap();
 			loop {
-				std::thread::sleep(CHECK_STREAM_INTERVAL);
+				std::thread::park_timeout(CHECK_STREAM_INTERVAL);
 				if should_drop.load(Ordering::SeqCst) {
 					break;
 				}
@@ -77,6 +88,7 @@ impl StreamManager {
 		});
 		StreamManagerController {
 			should_drop: should_drop_clone,
+			worker: Some(worker),
 		}
 	}
 

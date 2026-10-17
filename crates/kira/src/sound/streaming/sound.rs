@@ -26,6 +26,7 @@ pub(crate) struct Shared {
 	state: AtomicU8,
 	position: AtomicU64,
 	reached_end: AtomicBool,
+	pub(super) decoder_stopped: AtomicBool,
 }
 
 impl Shared {
@@ -34,6 +35,7 @@ impl Shared {
 			position: AtomicU64::new(0.0f64.to_bits()),
 			state: AtomicU8::new(PlaybackState::Playing as u8),
 			reached_end: AtomicBool::new(false),
+			decoder_stopped: AtomicBool::new(false),
 		}
 	}
 
@@ -265,6 +267,14 @@ impl Sound for StreamingSound {
 
 	fn finished(&self) -> bool {
 		self.state == PlaybackState::Stopped
+	}
+}
+
+impl Drop for StreamingSound {
+	fn drop(&mut self) {
+		// Sound destruction may happen on the audio callback. Only signal here;
+		// DecoderOwner performs joins on the gameplay owner thread.
+		self.shared.decoder_stopped.store(true, Ordering::Release);
 	}
 }
 

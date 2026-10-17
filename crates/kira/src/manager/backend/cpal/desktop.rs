@@ -64,7 +64,7 @@ impl Drop for CpalBackend {
 	fn drop(&mut self) {
 		if let State::Initialized {
 			stream_manager_controller,
-		} = &self.state
+		} = &mut self.state
 		{
 			stream_manager_controller.stop();
 		}
