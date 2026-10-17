@@ -28,12 +28,14 @@ CPU, and they can have delays when starting or seeking.
 mod data;
 mod decoder;
 mod handle;
+mod owner;
 mod settings;
 mod sound;
 
 pub use data::*;
 pub use decoder::*;
 pub use handle::*;
+pub use owner::{DecoderOwner, OwnedStreamingSoundData};
 pub use settings::*;
 
 use crate::{

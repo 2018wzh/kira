@@ -36,12 +36,28 @@ enum State {
 
 pub(super) struct StreamManagerController {
 	should_drop: Arc<AtomicBool>,
+	worker: Option<std::thread::JoinHandle<Result<(), Error>>>,
 }
 
 impl StreamManagerController {
-	pub fn stop(&self) {
-		self.should_drop.store(true, Ordering::SeqCst);
+	pub fn stop(&mut self) -> Result<(), Error> {
+		self.should_drop.store(true, Ordering::Release);
+		if let Some(worker) = self.worker.take() {
+			worker.thread().unpark();
+			worker.join().map_err(|_| Error::WorkerPanicked)??;
+		}
+		Ok(())
 	}
+	pub fn check(&mut self) -> Result<(), Error> {
+		if self.worker.as_ref().is_some_and(|worker| worker.is_finished()) {
+			return self.stop();
+		}
+		Ok(())
+	}
+}
+
+impl Drop for StreamManagerController {
+	fn drop(&mut self) { let _ = self.stop(); }
 }
 
 /// Starts a cpal stream and restarts it if needed
@@ -52,6 +68,7 @@ pub(super) struct StreamManager {
 	sample_rate: u32,
 	custom_device: bool,
 	buffer_size: BufferSize,
+	suspended: Arc<AtomicBool>,
 }
 
 impl StreamManager {
@@ -61,33 +78,42 @@ impl StreamManager {
 		mut config: StreamConfig,
 		custom_device: bool,
 		buffer_size: BufferSize,
-	) -> StreamManagerController {
+		suspended: Arc<AtomicBool>,
+	) -> Result<StreamManagerController, Error> {
 		let should_drop = Arc::new(AtomicBool::new(false));
-		let should_drop_clone = should_drop.clone();
-		std::thread::spawn(move || {
+		let worker_stop = Arc::clone(&should_drop);
+		let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+		let worker = std::thread::Builder::new().name("kira-cpal".into()).spawn(move || {
 			let mut stream_manager = StreamManager {
 				state: State::Idle { renderer },
 				device_name: device_name(&device),
 				sample_rate: config.sample_rate.0,
 				custom_device,
 				buffer_size,
+				suspended,
 			};
-			stream_manager.start_stream(&device, &mut config).unwrap();
-			loop {
-				std::thread::sleep(CHECK_STREAM_INTERVAL);
-				if should_drop.load(Ordering::SeqCst) {
-					break;
-				}
-				stream_manager.check_stream();
+			if let Err(error) = stream_manager.start_stream(&device, &mut config) {
+				let _ = ready_tx.send(Err(error));
+				return Ok(());
 			}
-		});
-		StreamManagerController {
-			should_drop: should_drop_clone,
+			if ready_tx.send(Ok(())).is_err() { return Ok(()); }
+			while !worker_stop.load(Ordering::Acquire) {
+				std::thread::park_timeout(CHECK_STREAM_INTERVAL);
+				if worker_stop.load(Ordering::Acquire) { break; }
+				stream_manager.check_stream()?;
+			}
+			Ok(())
+		}).map_err(Error::WorkerSpawn)?;
+		let mut controller = StreamManagerController { should_drop, worker: Some(worker) };
+		match ready_rx.recv() {
+			Ok(Ok(())) => Ok(controller),
+			Ok(Err(error)) => { let _ = controller.stop(); Err(error) }
+			Err(_) => { controller.stop()?; Err(Error::WorkerStopped) }
 		}
 	}
 
 	/// Restarts the stream if the audio device gets disconnected.
-	fn check_stream(&mut self) {
+	fn check_stream(&mut self) -> Result<(), Error> {
 		if let State::Running {
 			stream_error_consumer,
 			..
@@ -97,8 +123,7 @@ impl StreamManager {
 			if let Some(StreamError::DeviceNotAvailable) = stream_error_consumer.pop() {
 				self.stop_stream();
 				if let Ok((device, mut config)) = default_device_and_config() {
-					// TODO: gracefully handle errors that occur in this function
-					self.start_stream(&device, &mut config).unwrap();
+					self.start_stream(&device, &mut config)?;
 				}
 			}
 			// check for device changes if a custom device hasn't been specified
@@ -112,11 +137,12 @@ impl StreamManager {
 					let sample_rate = config.sample_rate.0;
 					if device_name != self.device_name || sample_rate != self.sample_rate {
 						self.stop_stream();
-						self.start_stream(&device, &mut config).unwrap();
+						self.start_stream(&device, &mut config)?;
 					}
 				}
 			}
 		}
+		Ok(())
 	}
 
 	fn start_stream(&mut self, device: &Device, config: &mut StreamConfig) -> Result<(), Error> {
@@ -137,9 +163,11 @@ impl StreamManager {
 		let (mut renderer_wrapper, renderer_consumer) = RendererWrapper::new(renderer);
 		let (mut stream_error_producer, stream_error_consumer) = HeapRb::new(1).split();
 		let channels = config.channels;
+		let suspended = Arc::clone(&self.suspended);
 		let stream = device.build_output_stream(
 			config,
 			move |data: &mut [f32], _| {
+				if suspended.load(Ordering::Acquire) { data.fill(0.0); return; }
 				#[cfg(feature = "assert_no_alloc")]
 				assert_no_alloc::assert_no_alloc(|| {
 					process_renderer(&mut renderer_wrapper, data, channels);
@@ -214,5 +242,36 @@ fn process_renderer(renderer_wrapper: &mut RendererWrapper, data: &mut [f32], ch
 				*channel = 0.0;
 			}
 		}
+	}
+}
+
+#[cfg(test)]
+mod lifetime_tests {
+	use super::*;
+	#[test]
+	fn controller_stop_wakes_and_joins_worker() {
+		let stopped = Arc::new(AtomicBool::new(false));
+		let finished = Arc::new(AtomicBool::new(false));
+		let worker_stop = Arc::clone(&stopped);
+		let worker_finished = Arc::clone(&finished);
+		let worker = std::thread::spawn(move || {
+			while !worker_stop.load(Ordering::Acquire) {
+				std::thread::park_timeout(Duration::from_secs(60));
+			}
+			worker_finished.store(true, Ordering::Release);
+			Ok(())
+		});
+		let mut controller = StreamManagerController { should_drop: stopped, worker: Some(worker) };
+		controller.stop().unwrap();
+		assert!(finished.load(Ordering::Acquire));
+		assert!(controller.worker.is_none());
+		controller.stop().unwrap();
+	}
+	#[test]
+	fn controller_panic_is_joined_and_reported() {
+		let worker = std::thread::spawn(|| -> Result<(), Error> { panic!("device worker panic fixture") });
+		let mut controller = StreamManagerController { should_drop: Arc::new(AtomicBool::new(false)), worker: Some(worker) };
+		assert!(matches!(controller.stop(), Err(Error::WorkerPanicked)));
+		assert!(controller.worker.is_none());
 	}
 }

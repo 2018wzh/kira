@@ -1,3 +1,28 @@
+# 0.9.6 native decoder ownership
+
+- Add `streaming::DecoderOwner` and
+  `StreamingSoundData::with_decoder_owner(&mut owner)` for explicit decoder
+  thread ownership. Playback handles retain their existing drop semantics.
+- `DecoderOwner::stop_and_join` stops every worker and joins all of them even
+  when one panics. Keep the owner on a non-audio thread and stop the audio
+  backend before closing the owner. Owner Drop provides the same cleanup.
+- Dropping a streaming sound only signals cancellation; it never joins on the
+  real-time callback. Custom decoders must return from `decode`/`seek` before a
+  join can complete. Decoding, interpolation, mixing and the 0.9.6 API remain
+  unchanged.
+
+- The desktop CPAL backend now owns and joins its stream-manager worker,
+  including startup failure and panic cleanup. Startup returns device errors
+  synchronously. `CpalBackend::shutdown` reports worker failure after cleanup;
+  `check` observes a failed worker without waiting for shutdown.
+- `set_suspended` / `suspension_state` pause the existing complete mixer at the
+  device callback boundary. Sounds, track fades and clocks do not advance while
+  suspended; device switching retains the same pause state.
+
+- Pin the CPAL 0.15.3 native teardown fix at
+  `65ac8a6ac1a635cc26bfc5af331295b052044908` from `2018wzh/cpal`, so WASAPI
+  joins its callback thread even when the termination channel has disconnected.
+
 # v0.9.6 - November 10, 2024
 
 - Improve performance when adding or subtracting large `f64`s from a `ClockTime`

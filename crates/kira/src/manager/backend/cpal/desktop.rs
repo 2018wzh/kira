@@ -1,6 +1,7 @@
 mod stream_manager;
 
 use stream_manager::{StreamManager, StreamManagerController};
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
 use crate::manager::backend::{Backend, Renderer};
 use cpal::{
@@ -28,6 +29,7 @@ pub struct CpalBackend {
 	/// Whether the device was specified by the user.
 	custom_device: bool,
 	buffer_size: BufferSize,
+	suspended: Arc<AtomicBool>,
 }
 
 impl Backend for CpalBackend {
@@ -55,6 +57,7 @@ impl Backend for CpalBackend {
 				state: State::Uninitialized { device, config },
 				custom_device,
 				buffer_size: settings.buffer_size,
+				suspended: Arc::new(AtomicBool::new(false)),
 			},
 			sample_rate,
 		))
@@ -70,7 +73,8 @@ impl Backend for CpalBackend {
 					config,
 					self.custom_device,
 					self.buffer_size,
-				),
+					Arc::clone(&self.suspended),
+				)?,
 			};
 		} else {
 			panic!("Cannot initialize the backend multiple times")
@@ -79,13 +83,28 @@ impl Backend for CpalBackend {
 	}
 }
 
-impl Drop for CpalBackend {
-	fn drop(&mut self) {
-		if let State::Initialized {
-			stream_manager_controller,
-		} = &self.state
-		{
-			stream_manager_controller.stop();
-		}
+impl CpalBackend {
+	/// Suspends the complete mixer without advancing sounds, fades or clocks.
+	pub fn set_suspended(&mut self, suspended: bool) {
+		self.suspended.store(suspended, Ordering::Release);
 	}
+	/// Shares the mixer suspension control with a native lifecycle owner.
+	pub fn suspension_state(&self) -> Arc<AtomicBool> { Arc::clone(&self.suspended) }
+	/// Reports a stopped/panicked device worker on the calling non-audio thread.
+	pub fn check(&mut self) -> Result<(), Error> {
+		if let State::Initialized { stream_manager_controller } = &mut self.state {
+			stream_manager_controller.check()?;
+		}
+		Ok(())
+	}
+	/// Stops the device and joins its worker. Call only outside audio callbacks.
+	pub fn shutdown(&mut self) -> Result<(), Error> {
+		if let State::Initialized { mut stream_manager_controller } = std::mem::replace(&mut self.state, State::Empty) {
+			stream_manager_controller.stop()?;
+		}
+		Ok(())
+	}
+}
+impl Drop for CpalBackend {
+	fn drop(&mut self) { let _ = self.shutdown(); }
 }

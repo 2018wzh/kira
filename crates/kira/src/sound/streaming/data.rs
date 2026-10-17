@@ -377,6 +377,12 @@ impl StreamingSoundData<crate::sound::FromFileError> {
 }
 
 impl<Error: Send + 'static> StreamingSoundData<Error> {
+	/// Attaches the decoder thread to an explicit non-audio-thread owner.
+	/// Dropping the returned playback handle does not stop the sound.
+	pub fn with_decoder_owner(self, owner: &mut super::DecoderOwner) -> super::OwnedStreamingSoundData<'_, Error> {
+		super::OwnedStreamingSoundData { data: self, owner }
+	}
+
 	pub(crate) fn split(
 		self,
 	) -> Result<

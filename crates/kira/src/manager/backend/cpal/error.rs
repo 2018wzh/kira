@@ -13,6 +13,12 @@ pub enum Error {
 	BuildStreamError(BuildStreamError),
 	/// An error occurred when starting the audio stream.
 	PlayStreamError(PlayStreamError),
+	/// The device worker could not be started.
+	WorkerSpawn(std::io::Error),
+	/// The device worker panicked.
+	WorkerPanicked,
+	/// The device worker ended before reporting startup.
+	WorkerStopped,
 }
 
 impl Display for Error {
@@ -24,6 +30,9 @@ impl Display for Error {
 			Error::DefaultStreamConfigError(error) => error.fmt(f),
 			Error::BuildStreamError(error) => error.fmt(f),
 			Error::PlayStreamError(error) => error.fmt(f),
+			Error::WorkerSpawn(error) => error.fmt(f),
+			Error::WorkerPanicked => f.write_str("CPAL device worker panicked"),
+			Error::WorkerStopped => f.write_str("CPAL device worker stopped before startup"),
 		}
 	}
 }
