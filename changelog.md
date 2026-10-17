@@ -13,6 +13,11 @@
 - Standalone runs pin the CPAL 0.15.3 WASAPI teardown fix at
   `65ac8a6ac1a635cc26bfc5af331295b052044908`; dependency consumers apply the
   same crates.io patch in their workspace root.
+- Final Windows run: all four `native_owners` tests passed, including the
+  explicit CPAL device test with three same-process reopen cycles. The chosen
+  Logitech G431 output used F32, 48 kHz, eight channels. Mixer position stopped
+  during suspension; every decoder was destroyed and the watcher joined before
+  reopen. The audio fixture is silent and does not prove audibility.
 
 # v0.10.8 - June 17, 2025
 

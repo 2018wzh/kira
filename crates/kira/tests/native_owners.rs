@@ -75,9 +75,18 @@ fn empty_decode_loop_is_cancellable_and_all_workers_join_after_panic() {
 #[test]
 #[ignore = "requires an actual audio output device; silent fixture tests lifecycle, not audibility"]
 fn real_cpal_suspends_and_joins_before_same_process_reopen() {
-    for _ in 0..3 {
+    use cpal::traits::{DeviceTrait, HostTrait};
+    for cycle in 0..3 {
         let mut owner = DecoderOwner::new();
-        let mut manager = kira::AudioManager::<kira::DefaultBackend>::new(kira::AudioManagerSettings::default()).unwrap();
+        let device = cpal::default_host().default_output_device().expect("native output device");
+        let name = device.name().unwrap();
+        let format = device.default_output_config().unwrap();
+        let settings = kira::AudioManagerSettings {
+            backend_settings: kira::backend::cpal::CpalBackendSettings { device: Some(device), ..Default::default() },
+            ..Default::default()
+        };
+        let mut manager = kira::AudioManager::<kira::DefaultBackend>::new(settings).unwrap();
+        eprintln!("CPAL cycle {cycle}: {name}; {format:?}");
         let (data, dropped, reads) = fixture(false, false);
         let handle = manager.play(data.with_decoder_owner(&mut owner)).unwrap();
         wait_until(|| reads.load(Ordering::Acquire) > 0 && handle.position() > 0.0);
@@ -94,5 +103,7 @@ fn real_cpal_suspends_and_joins_before_same_process_reopen() {
         let stopped = handle.position();
         thread::sleep(Duration::from_millis(30));
         assert_eq!(handle.position(), stopped);
+        eprintln!("CPAL cycle {cycle}: paused={paused:.6}s stopped={stopped:.6}s decoder_reads={} decoder_dropped=true watcher_joined=true",
+            reads.load(Ordering::Acquire));
     }
 }
