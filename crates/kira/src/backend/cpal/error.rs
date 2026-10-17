@@ -13,6 +13,10 @@ pub enum Error {
 	BuildStreamError(BuildStreamError),
 	/// An error occurred when starting the audio stream.
 	PlayStreamError(PlayStreamError),
+	/// The stream-manager thread could not be started.
+	StreamManagerSpawn(std::io::Error),
+	/// The stream-manager thread panicked.
+	StreamManagerPanicked,
 }
 
 impl Display for Error {
@@ -24,6 +28,8 @@ impl Display for Error {
 			Error::DefaultStreamConfigError(error) => error.fmt(f),
 			Error::BuildStreamError(error) => error.fmt(f),
 			Error::PlayStreamError(error) => error.fmt(f),
+			Error::StreamManagerSpawn(error) => write!(f, "Cannot start audio stream manager: {error}"),
+			Error::StreamManagerPanicked => f.write_str("Audio stream manager panicked"),
 		}
 	}
 }
@@ -34,6 +40,7 @@ impl std::error::Error for Error {
 			Error::DefaultStreamConfigError(error) => Some(error),
 			Error::BuildStreamError(error) => Some(error),
 			Error::PlayStreamError(error) => Some(error),
+			Error::StreamManagerSpawn(error) => Some(error),
 			_ => None,
 		}
 	}
