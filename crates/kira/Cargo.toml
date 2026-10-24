@@ -22,13 +22,13 @@ triple_buffer = "8.0.0"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies.cpal]
 version = "=0.15.3"
-git = "https://github.com/2018wzh/cpal.git"
+git = "https://github.com/Project-Shinkirou/cpal.git"
 rev = "65ac8a6ac1a635cc26bfc5af331295b052044908"
 optional = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies.cpal]
 version = "=0.15.3"
-git = "https://github.com/2018wzh/cpal.git"
+git = "https://github.com/Project-Shinkirou/cpal.git"
 rev = "65ac8a6ac1a635cc26bfc5af331295b052044908"
 optional = true
 features = ["wasm-bindgen"]
